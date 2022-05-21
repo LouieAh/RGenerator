@@ -1,11 +1,5 @@
-import overpy
 import requests
 import sys
-import xml.etree.ElementTree as ET
-
-api = overpy.Overpass()
-# openrouteservice Personal api key
-ors_api_key = "5b3ce3597851110001cf6248d3d35cb32ca94583a5de11210978d5ac"
 
 # Speed trace hardcoded list for prototype
 turn_distances = [150, 2010, 3067, 3456]
@@ -13,59 +7,67 @@ turn_distances = [150, 2010, 3067, 3456]
 # Nodes comprising of route taken
 route_nodes = []
 
-def ways_from_xml(xml_string):
+def get_node_id(node):
+    return node["id"]
+
+# Parse the JSON response to the API call made within the ways_of_node()
+# function for the way objects
+def ways_of_node_parser(response):
     ways = []
-    xml_root = ET.fromstring(xml_string)
-    # Iterate over children
-    for x in xml_root:
-        if x.tag == 'way':
-            ways.append(x)
+    for element in response["elements"]:
+        if (element["type"] == "way"):
+            ways.append(element)
     return ways
 
-# Get way(s) of starting node
-def ways_of_node(node_id):
-    # query = """
-    #     node({0});
-    #     way(bn);
-    #     out body;
-    # """
-    # #print(query.format(id))
-    # formatted_query = query.format(node_id)
-    # result = api.query(formatted_query)
-    # return result.ways
+# Given a node, return the ways that that node is part of by using the
+# Overpass API
+def ways_of_node(node):
     url = 'http://overpass-api.de/api/interpreter'
-    query_template = 'node({0});way(bn);out;'
-    query = query_template.format(node_id)
+    # Query the Overpass API to return all ways that node is part of
+    query_template = '[out:json];node({0});way(bn);out;'
+    # Substitute {0} for the ID of node
+    query = query_template.format(get_node_id(node))
+    # Make a POST request to the API, with query as the POST data
     response = requests.post(url, data = query)
-    return ways_from_xml(response.text)
+    return ways_of_node_parser(response.json())
 
-def nodes_from_xml(xml_string):
+# Take the JSON object response to the nodes_of_way request and parses it
+# to return the an ordered list of the nodes
+def nodes_of_way_parser(json):
     nodes = []
-    xml_root = ET.fromstring(xml_string)
-    # Iterate over children
-    for x in xml_root:
-        if x.tag == 'way':
-            # Iterate over way tag
-            for y in x:
-                if y.tag == 'nd':
-                    nodes.append(y)
+    ordered_node_ids = []
+    nodeId_node_dict = {}
+    # For each element within json
+    for element in json["elements"]:
+        # If the element is a node element
+        if (element["type"] == "node"):
+            # Create a new entry to node_dict in the form of
+            # <node id> : <node object>
+            nodeId_node_dict[element['id']] = element
+        # If the element is a way element
+        elif (element['type'] == 'way'):
+            # Add the node ids from json to ordered_node_ids[]
+            ordered_node_ids += element['nodes']
+
+    # For each node ID in ordered_node_ids[], do a lookup in nodeId_node_dict{}
+    # for the corresponding node and append that node to nodes[]
+    for id in ordered_node_ids:
+        nodes.append(nodeId_node_dict[id])
+
     return nodes
 
+def get_way_id(way):
+    return way["id"]
+
 # Get nodes within a way
-def nodes_of_way(way_id):
-    # query = """
-    #     way({0});
-    #     (._;>;);
-    #     out body;
-    # """
-    # formatted_query = query.format(way_id)
-    # way_obj = api.query(formatted_query)
-    # return way_obj.nodes
+def nodes_of_way(way):
     url = 'http://overpass-api.de/api/interpreter'
-    query_template = 'way({0});(._;>;);out;'
-    query = query_template.format(way_id)
+    #query_template_xml = 'way({0});(._;>;);out;'
+    query_template = '[out:json];way({0});(._;>;);out;'
+    query = query_template.format(get_way_id(way))
     response = requests.post(url, data = query)
-    return nodes_from_xml(response.text)
+    #return nodes_from_xml(response.text)
+    return nodes_of_way_parser(response.json())
 
 # ways = getWaysFromNodeId(2387213896)
 #
@@ -113,78 +115,89 @@ def nodes_of_way(way_id):
 #     print("----")
 #     break
 
-def node_ids_from_nodes(nodes):
-    node_ids = []
-    for node in nodes:
-        node_ids.append(int(node.attrib['ref']))
-    return node_ids
-
-def local_neighbour_nodes(node_id, way_id):
+# Given a node and the way its part of, return the neighbour nodes
+def local_neighbour_nodes(node, way):
+    # The list of nodes that will be returned
     way_neighbour_nodes = []
+    # Get the nodes of way
+    way_nodes = nodes_of_way(way)
+    # Create a new list by replacing each node in way_nodes with the node's ID
+    way_node_ids = []
+    for nd in way_nodes:
+        way_node_ids.append(get_node_id(nd))
 
-    way_nodes = nodes_of_way(way_id)
-    way_node_ids = node_ids_from_nodes(way_nodes)
+    # Retrieve the index of node from the way_node_ids[] list
+    node_index = way_node_ids.index(get_node_id(node))
 
-    # Get index of node_id within way_node_ids
-    index = way_node_ids.index(node_id)
-    node_list_size = len(way_node_ids)
+    way_nodes_size = len(way_nodes)
 
-    # If node is only node in way
-    if (len(way_nodes) == 1):
-        # Return empty list
+    # Given the node_index and how many nodes are within way_nodes, add the
+    # neighbour nodes to way_neighbour_nodes[].
+    # If node is the only node in way
+    if (way_nodes_size == 1):
+        # Return an empty list as node has no neighbours
         return way_neighbour_nodes
-    # If only one other node in way
-    elif (len(way_nodes) == 2):
-        # Return node at index XOR to node
-        xor_index = 1 - index
-        other = way_node_ids[xor_index]
-        way_neighbour_nodes.append(other)
+    # If there are only two nodes in way
+    elif (way_nodes_size == 2):
+        # Add the node that has index 0 if node_index is 1, or index 1 if
+        # node_index is 0
+        way_neighbour_nodes.append(way_node_ids[1 - node_index])
     else:
-        # If node is first in way
-        if (index == 0):
-            # Return only node after
-            after = way_node_ids[index + 1]
-            way_neighbour_nodes.append(after)
-        # If node is last in way
-        elif (index == node_list_size - 1):
-            # Return only node before
-            before = way_node_ids[index - 1]
-            way_neighbour_nodes.append(before)
+        # When there are 3 or more nodes in the way and...
+        # Node is at index 0
+        if (node_index == 0):
+            # Add the second node
+            way_neighbour_nodes.append(way_node_ids[node_index + 1])
+        # Node is at the last index
+        elif (node_index == way_nodes_size - 1):
+            # Add the node before
+            way_neighbour_nodes.append(way_node_ids[node_index - 1])
+        # Node is sandwiched between two other nodes
         else:
-            before = way_node_ids[index - 1]
-            after = way_node_ids[index + 1]
-            way_neighbour_nodes.append(before)
-            way_neighbour_nodes.append(after)
+            # Add the nodes immediately before and after
+            way_neighbour_nodes.append(way_node_ids[node_index - 1])
+            way_neighbour_nodes.append(way_node_ids[node_index + 1])
     return way_neighbour_nodes
 
-def way_id(way):
-    way_id = int(way.attrib["id"])
-    return way_id
-
-def global_neighbour_nodes(node_id):
+# Return all neighbour nodes from each way that node is part of
+def global_neighbour_nodes(node):
+    # A list of the neighbour nodes from each way that node is part of
     neighbour_nodes = []
-    # Get ways
-    ways = ways_of_node(node_id)
-
+    # Get all ways that node is part of
+    ways = ways_of_node(node)
+    # For each way that node is part of, append each neighbour node to
+    # the neighbour_nodes[] list
     for way in ways:
-        # Merge the returned list with nodes[] list
-        neighbour_nodes += local_neighbour_nodes(node_id, way_id(way))
+        neighbour_nodes += local_neighbour_nodes(node, way)
+
     print(neighbour_nodes)
     sys.exit()
+    return
 
-def next_node(start_node_id):
+# This function will evaluate what the best fitting next node is based on
+# the distance to the turn based on the speed trace data
+def get_next_node(node):
     # Get all neighbour nodes
-    nodes = global_neighbour_nodes(start_node_id)
+    nodes = global_neighbour_nodes(node)
+    # for each node in nodes calculate route distance
+    # and compare with distance to next speed drop
+    return
 
-def route(start_node_id):
+def route(node):
     # Clear any nodes already in route_nodes[] list
     route_nodes.clear()
     # Get next node
-    route_nodes.append(next_node(start_node_id))
+    next_node = get_next_node(node)
 
 def start():
     #node = start_node(lat, long)
     #route(node)
-    route(8336028505)
+    test_node = {
+        "type": "node",
+        "id": 8336028505,
+        "lat": 51.5134746,
+        "lon": -0.0999181
+        }
+    route(test_node)
 
 start()
