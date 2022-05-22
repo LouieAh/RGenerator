@@ -159,20 +159,35 @@ def local_neighbour_nodes(node, way):
             way_neighbour_nodes.append(way_node_ids[node_index + 1])
     return way_neighbour_nodes
 
+# Given a list of ways, return only the ways with a key of highway
+def get_highway_ways(ways):
+    # The 'highway' key values for ways a vehicle can travel along
+    # Source: https://wiki.openstreetmap.org/wiki/Key:highway
+    suitable_ways = [
+        'motorway', 'trunk', 'primary', 'seconday', 'tertiary',
+        'unclassified', 'residential', 'motorway_link', 'trunk_link',
+        'primary_link', 'secondary_link', 'tertiary_link', 'service',
+        'pedestrian', 'track', 'escape', 'road', 'rest_area', 'services'
+    ]
+    returned_ways = []
+    for way in ways:
+        if (way['tags']['highway'] in suitable_ways):
+            returned_ways.append(way)
+    return returned_ways
+
 # Return all neighbour nodes from each way that node is part of
 def global_neighbour_nodes(node):
     # A list of the neighbour nodes from each way that node is part of
     neighbour_nodes = []
     # Get all ways that node is part of
     ways = ways_of_node(node)
+    highway_ways = get_highway_ways(ways)
     # For each way that node is part of, append each neighbour node to
     # the neighbour_nodes[] list
     for way in ways:
         neighbour_nodes += local_neighbour_nodes(node, way)
 
-    print(neighbour_nodes)
-    sys.exit()
-    return
+    return neighbour_nodes
 
 # This function will evaluate what the best fitting next node is based on
 # the distance to the turn based on the speed trace data
@@ -192,12 +207,28 @@ def route(node):
 def start():
     #node = start_node(lat, long)
     #route(node)
+    # test_node = {
+    #     "type": "node",
+    #     "id": 8336028505,
+    #     "lat": 51.5134746,
+    #     "lon": -0.0999181
+    #     }
+    # test_node = {
+    #     "type": "node",
+    #     "id": 107685,
+    #     "lat": 51.5139944,
+    #     "lon": -0.1025298
+    # }
     test_node = {
         "type": "node",
-        "id": 8336028505,
-        "lat": 51.5134746,
-        "lon": -0.0999181
+        "id": 1726730165,
+        "lat": 51.5134571,
+        "lon": -0.0998721,
+        "tags": {
+            "crossing": "unmarked",
+            "highway": "crossing"
         }
+    }
     route(test_node)
 
 start()
