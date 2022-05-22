@@ -1,6 +1,9 @@
 import requests
 import sys
 
+# openrouteservice api key
+ors_api_key = "5b3ce3597851110001cf6248e833e52b91534acebb595a75da232d56"
+
 # Speed trace hardcoded list for prototype
 turn_distances = [150, 2010, 3067, 3456]
 
@@ -69,52 +72,6 @@ def nodes_of_way(way):
     #return nodes_from_xml(response.text)
     return nodes_of_way_parser(response.json())
 
-# ways = getWaysFromNodeId(2387213896)
-#
-# # For each way
-# for way in ways:
-#
-#     # Get nodes in way
-#     way_id = way.id
-#     way_nodes = getNodesWithinWay(way_id)
-#
-#     # For each node in way
-#     for node in way_nodes:
-#
-#         # if node is part of 3 or more ways
-#         if (len(getWaysFromNodeId(node.id)) > 1):
-#
-#             # Get lat,long of that node
-#             # Convert to float to be of same type as start lat and long
-#             lat = float(node.lat)
-#             long = float(node.lon)
-#
-#             if (lat != start_lat and long != start_long):
-#
-#                 # Get route distance between that node and starting node
-#                 api_call = """\
-#                 https://api.openrouteservice.org\
-#                 /v2/directions/driving-hgv\
-#                 ?api_key={0}\
-#                 &start={1},{2}&end={3},{4}\
-#                 """
-#                 formatted_api_call =\
-#                     api_call.format(ors_api_key, start_long, start_lat, long, lat)
-#
-#                 # Remove spaces
-#                 formatted_api_call = formatted_api_call.replace(" ","")
-#
-#                 #print(formatted_api_call)
-#                 response = requests.get(formatted_api_call)
-#
-#                 #print(response)
-#                 response_json = response.json()
-#
-#                 distance = response_json["features"][0]["properties"]["summary"]["distance"]
-#                 print(distance)
-#     print("----")
-#     break
-
 # Given a node and the way its part of, return the neighbour nodes
 def local_neighbour_nodes(node, way):
     # The list of nodes that will be returned
@@ -141,22 +98,22 @@ def local_neighbour_nodes(node, way):
     elif (way_nodes_size == 2):
         # Add the node that has index 0 if node_index is 1, or index 1 if
         # node_index is 0
-        way_neighbour_nodes.append(way_node_ids[1 - node_index])
+        way_neighbour_nodes.append(way_nodes[1 - node_index])
     else:
         # When there are 3 or more nodes in the way and...
         # Node is at index 0
         if (node_index == 0):
             # Add the second node
-            way_neighbour_nodes.append(way_node_ids[node_index + 1])
+            way_neighbour_nodes.append(way_nodes[node_index + 1])
         # Node is at the last index
         elif (node_index == way_nodes_size - 1):
             # Add the node before
-            way_neighbour_nodes.append(way_node_ids[node_index - 1])
+            way_neighbour_nodes.append(way_nodes[node_index - 1])
         # Node is sandwiched between two other nodes
         else:
             # Add the nodes immediately before and after
-            way_neighbour_nodes.append(way_node_ids[node_index - 1])
-            way_neighbour_nodes.append(way_node_ids[node_index + 1])
+            way_neighbour_nodes.append(way_nodes[node_index - 1])
+            way_neighbour_nodes.append(way_nodes[node_index + 1])
     return way_neighbour_nodes
 
 # Given a list of ways, return only the ways with a key of highway
@@ -175,8 +132,9 @@ def get_highway_ways(ways):
             returned_ways.append(way)
     return returned_ways
 
-# Return all neighbour nodes from each way that node is part of
-def global_neighbour_nodes(node):
+# Given a node, return its neighbour nodes of way that a vehicle could
+# traverse along
+def viable_neighbour_nodes(node):
     # A list of the neighbour nodes from each way that node is part of
     neighbour_nodes = []
     # Get all ways that node is part of
@@ -184,16 +142,77 @@ def global_neighbour_nodes(node):
     highway_ways = get_highway_ways(ways)
     # For each way that node is part of, append each neighbour node to
     # the neighbour_nodes[] list
-    for way in ways:
+    for way in highway_ways:
         neighbour_nodes += local_neighbour_nodes(node, way)
 
     return neighbour_nodes
 
+# Request a route be plotted between an origin and destination by ORS and
+# return the JSON response
+def ors_route(origin_lat, origin_long, destination_lat, destination_long):
+    # Template request to ors api for route between two locations
+    ors_api_request_template = '''
+        https://api.openrouteservice.org
+        /v2/directions/driving-hgv
+        ?api_key={0}
+        &start={1},{2}&end={3},{4}
+        '''
+    # Substitute values into the template request - ors accepts coordinates
+    # in 'long,lat' format NOT 'lat,long'
+    ors_api_request_raw =\
+        ors_api_request_template.format(
+            ors_api_key,
+            origin_long, origin_lat,
+            destination_long, destination_lat)
+    # Remove newlines and whitespace
+    ors_api_request = ors_api_request_raw.replace('\n','').replace(' ','')
+    # Make the GET request to the ors api
+    response = requests.get(ors_api_request)
+    # Return the JSON representation of the response
+    return response.json()
+
+# Given a node, return its coordinates in list format
+def node_coordinates(node):
+    coordinates = []
+    coordinates.insert(0, node['lat'])
+    coordinates.insert(1, node['lon'])
+    return coordinates
+
+# Takes in the JSON response to the ORS API route call and parses it to extract
+# and return the distance
+def ors_route_parser(response):
+    # Return the distance in meters rounded to nearest metre
+    return round(response['features'][0]['properties']['summary']['distance'])
+
+
+# Returns an ordered list of distances between a start node and a list of
+# destination nodes
+def distance_matrix(origin_node, destination_nodes):
+    # The list to be returned
+    distances = []
+    # Get the latitude and longitude for start_node
+    origin_coordinates = node_coordinates(origin_node)
+    # For each destination node, get the distance
+    for destination_node in destination_nodes:
+        # Get the coordinates (as a list of lat, long) of the destination node
+        destination_coordinates = node_coordinates(destination_node)
+        # Make a request to the ors api for a route between origin and destination
+        response = ors_route(
+            origin_coordinates[0], origin_coordinates[1],
+            destination_coordinates[0], destination_coordinates[1])
+        # Parse the response for the distance and add it to distances[]
+        distances.append(ors_route_parser(response))
+
+    return distances
+
 # This function will evaluate what the best fitting next node is based on
 # the distance to the turn based on the speed trace data
-def get_next_node(node):
+def get_next_node(current_node):
     # Get all neighbour nodes
-    nodes = global_neighbour_nodes(node)
+    neighbour_nodes = viable_neighbour_nodes(current_node)
+    # Get an ordered list of the distance from node to each neighbour_node
+    neighbour_node_distances = distance_matrix(current_node, neighbour_nodes)
+
     # for each node in nodes calculate route distance
     # and compare with distance to next speed drop
     return
@@ -219,6 +238,7 @@ def start():
     #     "lat": 51.5139944,
     #     "lon": -0.1025298
     # }
+    #
     test_node = {
         "type": "node",
         "id": 1726730165,
